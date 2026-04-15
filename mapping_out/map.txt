@@ -1,0 +1,63 @@
+thepress_bot_go
+├── README.md
+├── bot.exe
+├── bot.exe~
+├── bot_live.log
+├── bot_state.db
+├── bot_ultimate.db
+├── bot_ultimate.db-shm
+├── bot_ultimate.db-wal
+├── cmd
+│   └── bot
+│       └── main.go
+├── go.mod
+├── go.sum
+├── internal
+│   ├── config
+│   │   └── config.go
+│   ├── domain
+│   │   ├── models
+│   │   │   ├── article.go
+│   │   │   └── feed.go
+│   │   ├── repository
+│   │   │   └── interfaces.go
+│   │   └── services
+│   │       └── ai_interface.go
+│   ├── infra
+│   │   ├── ai
+│   │   │   ├── factory.go
+│   │   │   ├── modelslab.go
+│   │   │   └── nvidia.go
+│   │   ├── api
+│   │   │   ├── server.go
+│   │   │   └── static
+│   │   │       ├── index.html
+│   │   │       ├── script.js
+│   │   │       ├── style.css
+│   │   │       ├── temp_image.jpg
+│   │   │       └── uploads
+│   │   │           └── placeholder.txt
+│   │   ├── database
+│   │   │   └── sqlite.go
+│   │   ├── publisher
+│   │   │   ├── linker.go
+│   │   │   └── wordpress.go
+│   │   ├── repository
+│   │   │   └── sqlite_article_repo.go
+│   │   ├── scraper
+│   │   │   ├── client.go
+│   │   │   ├── rss.go
+│   │   │   ├── scraper_test.go
+│   │   │   ├── stealth.go
+│   │   │   └── universal.go
+│   │   └── utils
+│   │       ├── browser.go
+│   │       ├── downloader.go
+│   │       ├── logger.go
+│   │       └── sanitizer.go
+│   └── usecase
+│       ├── article_usecase.go
+│       └── article_usecase_test.go
+└── run_bot.bat
+
+20 directories, 41 files
