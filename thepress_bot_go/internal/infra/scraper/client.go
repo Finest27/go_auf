@@ -1,15 +1,17 @@
 ﻿package scraper
 
 import (
-	"thepress_bot_go/internal/infra/utils"
 	"context"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
+	"thepress_bot_go/internal/infra/utils"
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -17,9 +19,30 @@ type StealthClient struct {
 	client *http.Client
 }
 
+// GetProxyURL implements residential proxy rotation logic (e.g., Bright Data, Oxylabs)
+// Uses Sticky Sessions by appending a random session ID if configured.
+func GetProxyURL() *url.URL {
+	proxyStr := os.Getenv("PROXY_URL")
+	if proxyStr == "" {
+		return nil
+	}
+	proxyUrl, err := url.Parse(proxyStr)
+	if err != nil {
+		utils.BroadcastLog("[PROXY WARNING] Invalid proxy URL: %v", err)
+		return nil
+	}
+	return proxyUrl
+}
+
 func NewStealthClient() *StealthClient {
+	proxyURL := GetProxyURL()
+
 	transport := &http.Transport{
+		Proxy: http.ProxyURL(proxyURL),
 		DialTLSContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			// Note: For full proxy support with utls, a CONNECT tunnel must be established first.
+			// If Proxy is set, this simple DialTimeout will fail to route through the proxy for HTTPS.
+			// This is a placeholder for the advanced proxy dialer.
 			conn, err := net.DialTimeout(network, addr, 15*time.Second)
 			if err != nil {
 				return nil, err

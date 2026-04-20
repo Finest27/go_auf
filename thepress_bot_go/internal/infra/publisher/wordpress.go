@@ -51,6 +51,7 @@ func (wp *WPClient) UploadImageFromURL(imageURL, altText string) (int, error) {
 	}
 	temp := filepath.Join(os.TempDir(), fmt.Sprintf("botfeat_%d.jpg", time.Now().UnixNano()))
 
+	utils.BroadcastLog("[MEDIA PIPELINE] Downloading featured image from: %s", imageURL)
 	var err error
 	for i := 0; i < 2; i++ {
 		if err = utils.DownloadFileToPath(imageURL, temp); err == nil {
@@ -59,6 +60,7 @@ func (wp *WPClient) UploadImageFromURL(imageURL, altText string) (int, error) {
 		time.Sleep(2 * time.Second)
 	}
 	if err != nil {
+		utils.BroadcastLog("[MEDIA PIPELINE WARNING] Failed to download image: %v", err)
 		return 0, err
 	}
 	defer os.Remove(temp)
@@ -66,15 +68,22 @@ func (wp *WPClient) UploadImageFromURL(imageURL, altText string) (int, error) {
 	if wp.AI != nil {
 		imgBytes, err := os.ReadFile(temp)
 		if err == nil {
-			utils.BroadcastLog("[AI] Մշակվում է նկարը...")
+			utils.BroadcastLog("[MEDIA PIPELINE] AI processing image (inpainting/cleaning)...")
 			processed, err := wp.AI.ProcessImage(context.Background(), imgBytes, "Clean news photo")
-			if err == nil {
+			if err == nil && len(processed) > 0 {
+				utils.BroadcastLog("[MEDIA PIPELINE] AI processing successful, saving enhanced image.")
 				_ = os.WriteFile(temp, processed, 0644)
+			} else {
+				utils.BroadcastLog("[MEDIA PIPELINE WARNING] AI image processing failed or returned empty: %v", err)
 			}
 		}
 	}
 
+	utils.BroadcastLog("[MEDIA PIPELINE] Uploading processed image to WordPress Media Library...")
 	id, _, err := wp.UploadImageToMediaLibrary(temp, altText)
+	if err == nil {
+		utils.BroadcastLog("[MEDIA PIPELINE] Successfully uploaded image. Media ID: %d", id)
+	}
 	return id, err
 }
 
@@ -154,12 +163,18 @@ func (wp *WPClient) ProcessInlineImages(html string) (string, error) {
 		wg.Add(1)
 		go func(sel *goquery.Selection, u string) {
 			defer wg.Done()
+			utils.BroadcastLog("[MEDIA PIPELINE] Processing inline image: %s", u)
 			temp := filepath.Join(os.TempDir(), fmt.Sprintf("bimg_%d.jpg", time.Now().UnixNano()))
 			if err := utils.DownloadFileToPath(u, temp); err == nil {
 				defer os.Remove(temp)
 				if id, nu, err := wp.UploadImageToMediaLibrary(temp, ""); err == nil && id > 0 {
+					utils.BroadcastLog("[MEDIA PIPELINE] Inline image uploaded successfully. New URL: %s", nu)
 					results <- uploadResult{sel, nu}
+				} else {
+					utils.BroadcastLog("[MEDIA PIPELINE WARNING] Failed to upload inline image: %v", err)
 				}
+			} else {
+				utils.BroadcastLog("[MEDIA PIPELINE WARNING] Failed to download inline image: %v", err)
 			}
 		}(s, src)
 	})

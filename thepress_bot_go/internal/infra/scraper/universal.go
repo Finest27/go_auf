@@ -9,6 +9,7 @@ import (
 	"github.com/go-rod/rod"
 	"github.com/go-shiori/go-readability"
 	"github.com/microcosm-cc/bluemonday"
+	"thepress_bot_go/internal/infra/utils"
 )
 
 type UniversalScraper struct {
@@ -34,8 +35,21 @@ func (s *UniversalScraper) Scrape(ctx context.Context, rawURL string) (string, s
 		return "", "", "", fmt.Errorf("navigate failed: %w", err)
 	}
 
-	// Optimization: Wait a bit longer to ensure dynamic content renders
-	_ = page.WaitDOMStable(3*time.Second, 0.1)
+	// Advanced Evasion: Polling for main content selectors instead of arbitrary wait
+	// This reduces scraping time significantly for fast pages and ensures we wait for React/Vue hydration
+	selectorsToPoll := []string{"article", "main", ".post-content", ".article-body", ".entry-content"}
+	pollCtx, cancelPoll := context.WithTimeout(ctx, 15*time.Second)
+	defer cancelPoll()
+	
+	for _, sel := range selectorsToPoll {
+		if _, err := page.Context(pollCtx).Element(sel); err == nil {
+			utils.BroadcastLog("[SCRAPER] Selective element polling found: %s", sel)
+			break
+		}
+	}
+	
+	// Slight buffer for image loading inside the found element
+	time.Sleep(1 * time.Second)
 
 	html, err := page.HTML()
 	if err != nil {

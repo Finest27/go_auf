@@ -74,24 +74,60 @@ func (n *NvidiaProvider) ProcessImage(ctx context.Context, imageBytes []byte, pr
 
 func (n *NvidiaProvider) ProcessArticle(ctx context.Context, title, content string) (*services.AIResult, error) {
 	url := "https://integrate.api.nvidia.com/v1/chat/completions"
-	userPrompt := fmt.Sprintf("????????: %s\n???????????????: %s", title, content)
 
+	utils.BroadcastLog("[AI] Starting Multi-Stage Rewriting Pipeline for: %s", title)
+
+	// Multi-Stage Rewriting Pipeline
+	// Stage 1: Extraction & Summarization
+	stage1Prompt := fmt.Sprintf("Extract the core facts, entities, and primary narrative from this article.\nTitle: %s\nContent: %s", title, content)
+	facts, err := n.runSimpleCompletion(ctx, url, n.TextModels[0], stage1Prompt)
+	if err != nil {
+		utils.BroadcastLog("[AI WARNING] Stage 1 (Extraction) failed, falling back to direct rewrite.")
+		facts = content // fallback
+	}
+
+	// Stage 2: Localization & Stylistic Adaptation (Armenian) and JSON output
+	userPrompt := fmt.Sprintf("Based on these facts, write a high-quality journalistic article in Armenian.\nFacts:\n%s", facts)
+	
+	var res *services.AIResult
+	var lastErr error
+	
+	// Circuit Breaker / Fallback Logic
 	for _, model := range n.TextModels {
-		res, err := n.tryModel(ctx, url, model, userPrompt)
-		if err == nil { return res, nil }
-		
-		// SCHEME 2: AI Self-Correction if JSON is invalid
-		if err != nil && (res == nil) {
-			utils.BroadcastLog("[AI] JSON error with %s, attempting self-correction...", model)
-			retryPrompt := userPrompt + "\n\nCRITICAL: Your previous response was not a valid JSON. Output ONLY the JSON object, no markdown, no conversational text."
-			res, err = n.tryModel(ctx, url, model, retryPrompt)
-			if err == nil { return res, nil }
+		res, lastErr = n.tryModel(ctx, url, model, userPrompt)
+		if lastErr == nil && res != nil { 
+			utils.BroadcastLog("[AI SUCCESS] Article rewritten successfully using %s", model)
+			return res, nil 
 		}
 		
-		utils.BroadcastLog("[AI] %s failed: %v", model, err)
-		time.Sleep(1 * time.Second)
+		// SCHEME 2: AI Self-Correction if JSON is invalid
+		if lastErr != nil && (res == nil) {
+			utils.BroadcastLog("[AI] JSON error with %s, attempting self-correction...", model)
+			retryPrompt := userPrompt + "\n\nCRITICAL: Your previous response was not a valid JSON. Output ONLY the JSON object, no markdown, no conversational text. Include fields: rewritten, description, keywords, slug, category, tags, image_alt."
+			res, lastErr = n.tryModel(ctx, url, model, retryPrompt)
+			if lastErr == nil && res != nil { 
+				utils.BroadcastLog("[AI SUCCESS] Article rewritten successfully after correction using %s", model)
+				return res, nil 
+			}
+		}
+		
+		utils.BroadcastLog("[AI] Model %s failed: %v", model, lastErr)
+		time.Sleep(2 * time.Second)
 	}
-	return nil, fmt.Errorf("all models failed")
+
+	return nil, fmt.Errorf("circuit breaker triggered: all models failed. Last error: %w", lastErr)
+}
+
+func (n *NvidiaProvider) runSimpleCompletion(ctx context.Context, url, model, prompt string) (string, error) {
+	bodyData := map[string]interface{}{
+		"model": model,
+		"messages": []map[string]string{
+			{"role": "system", "content": "You are an expert journalist. Extract facts objectively."},
+			{"role": "user", "content": prompt},
+		},
+		"temperature": 0.1,
+	}
+	return n.executeRequest(ctx, url, bodyData)
 }
 
 func (n *NvidiaProvider) tryModel(ctx context.Context, url, model, prompt string) (*services.AIResult, error) {

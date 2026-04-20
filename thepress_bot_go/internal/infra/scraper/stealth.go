@@ -40,5 +40,29 @@ func PreparePage(b *rod.Browser) *rod.Page {
 		AcceptLanguage: "en-US,en;q=0.9",
 	})
 	page.MustSetViewport(1920, 1080, 1, false)
+
+	// Advanced fingerprint spoofing (WebGL, Canvas, AudioContext)
+	spoofScript := `
+		// Spoof WebGL
+		const getParameter = WebGLRenderingContext.getParameter;
+		WebGLRenderingContext.prototype.getParameter = function(parameter) {
+			if (parameter === 37445) return 'Intel Inc.';
+			if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+			return getParameter(parameter);
+		};
+		// Spoof AudioContext
+		if (window.AudioContext) {
+			const origGetChannelData = AudioBuffer.prototype.getChannelData;
+			AudioBuffer.prototype.getChannelData = function() {
+				const results = origGetChannelData.apply(this, arguments);
+				for (let i = 0; i < results.length; i += 100) {
+					results[i] = results[i] + (Math.random() * 0.0001 - 0.00005);
+				}
+				return results;
+			};
+		}
+	`
+	page.MustEvalOnNewDocument(spoofScript)
+
 	return page
 }
