@@ -1,3 +1,0 @@
-echo Starting ThePress Bot Ultimate...
-bot.exe
-pause
