@@ -134,6 +134,9 @@ func (s *Server) handleUpdateQueueItem(c *fiber.Ctx) error {
 	var body struct {
 		Title            string `json:"title"`
 		RewrittenContent string `json:"rewritten_content"`
+		MetaDescription  string `json:"meta_description"`
+		FocusKeywords    string `json:"focus_keywords"`
+		Tags             string `json:"tags"`
 	}
 	if err := c.BodyParser(&body); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Invalid body"})
@@ -142,6 +145,12 @@ func (s *Server) handleUpdateQueueItem(c *fiber.Ctx) error {
 	art.Title = body.Title
 	art.RewrittenContent.String = body.RewrittenContent
 	art.RewrittenContent.Valid = true
+	art.MetaDescription.String = body.MetaDescription
+	art.MetaDescription.Valid = true
+	art.FocusKeywords.String = body.FocusKeywords
+	art.FocusKeywords.Valid = true
+	art.Tags.String = body.Tags
+	art.Tags.Valid = true
 
 	if err := s.articleRepo.Update(c.Context(), art); err != nil {
 		return c.Status(500).JSON(fiber.Map{"error": err.Error()})

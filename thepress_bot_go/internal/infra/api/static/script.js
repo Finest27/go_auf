@@ -268,6 +268,24 @@ function showPreview(item) {
     document.getElementById('prev-title').innerText = item.title;
     document.getElementById('prev-content').innerHTML = item.rewritten_content?.String || item.content;
     
+    const badgesContainer = document.getElementById('prev-badges');
+    if (badgesContainer) {
+        badgesContainer.innerHTML = '';
+        const addBadge = (text, colorClass) => {
+            if (!text) return;
+            const span = document.createElement('span');
+            span.className = `px-3 py-1 rounded-full text-[10px] font-black uppercase border ${colorClass}`;
+            span.innerText = text;
+            badgesContainer.appendChild(span);
+        };
+        addBadge(item.category?.String, 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20');
+        if (item.focus_keywords?.String) {
+            item.focus_keywords.String.split(',').forEach(k => addBadge(k.trim(), 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'));
+        }
+    }
+    
+    window.currentArticleData = item;
+
     let imgUrl = item.image_url?.String || item.image_url || "";
     document.getElementById('prev-image').src = imgUrl;
     document.getElementById('prev-image').style.display = imgUrl ? 'block' : 'none';
@@ -277,10 +295,13 @@ function showPreview(item) {
 }
 
 function openEditModal() {
-    const title = document.getElementById('prev-title').innerText;
-    const content = document.getElementById('prev-content').innerHTML;
-    document.getElementById('edit-title').value = title;
-    document.getElementById('edit-content').value = content;
+    const item = window.currentArticleData || {};
+    document.getElementById('edit-title').value = item.title || "";
+    document.getElementById('edit-content').value = item.rewritten_content?.String || item.content || "";
+    if(document.getElementById('edit-meta')) document.getElementById('edit-meta').value = item.meta_description?.String || "";
+    if(document.getElementById('edit-keywords')) document.getElementById('edit-keywords').value = item.focus_keywords?.String || "";
+    if(document.getElementById('edit-tags')) document.getElementById('edit-tags').value = item.tags?.String || "";
+    
     document.getElementById('edit-modal').classList.remove('hidden');
 }
 
@@ -288,7 +309,10 @@ async function saveEdit() {
     if (!currentArticleId) return;
     const updated = {
         title: document.getElementById('edit-title').value,
-        rewritten_content: document.getElementById('edit-content').value
+        rewritten_content: document.getElementById('edit-content').value,
+        meta_description: document.getElementById('edit-meta') ? document.getElementById('edit-meta').value : "",
+        focus_keywords: document.getElementById('edit-keywords') ? document.getElementById('edit-keywords').value : "",
+        tags: document.getElementById('edit-tags') ? document.getElementById('edit-tags').value : ""
     };
     const r = await fetch(`/api/queue/${currentArticleId}`, {
         method: "PUT",
@@ -298,9 +322,8 @@ async function saveEdit() {
     if (r.ok) {
         showToast("Հոդվածը պահպանվեց", "success");
         closeEditModal();
+        closePreview();
         pollQueue(); loadAnalytics();
-        document.getElementById('prev-title').innerText = updated.title;
-        document.getElementById('prev-content').innerHTML = updated.rewritten_content;
     }
 }
 

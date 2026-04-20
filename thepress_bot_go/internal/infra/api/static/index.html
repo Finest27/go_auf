@@ -264,6 +264,7 @@
                 <img id="prev-image" src="" class="w-full h-72 object-cover rounded-[2rem] border border-white/10" style="display:none;">
                 <div>
                     <h2 id="prev-title" class="text-3xl font-800 text-white leading-tight mb-4"></h2>
+                    <div class="flex gap-2 mb-6 flex-wrap" id="prev-badges"></div>
                     <div id="prev-content" class="text-slate-300 text-lg leading-relaxed"></div>
                 </div>
             </div>
@@ -286,6 +287,20 @@
                 <div class="input-group">
                     <label>Վերնագիր</label>
                     <input type="text" id="edit-title" class="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-white font-bold">
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div class="input-group">
+                        <label>Focus Keywords</label>
+                        <input type="text" id="edit-keywords" class="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-white text-sm">
+                    </div>
+                    <div class="input-group">
+                        <label>Tags</label>
+                        <input type="text" id="edit-tags" class="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-white text-sm">
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Meta Description</label>
+                    <textarea id="edit-meta" rows="2" class="w-full bg-black/40 border border-white/10 rounded-2xl p-4 text-sm text-slate-200 outline-none focus:border-indigo-500 custom-scrollbar"></textarea>
                 </div>
                 <div class="input-group">
                     <label>Բովանդակություն (HTML)</label>
