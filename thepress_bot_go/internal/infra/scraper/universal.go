@@ -28,15 +28,14 @@ func (s *UniversalScraper) Scrape(ctx context.Context, rawURL string) (string, s
 	// Ensure page is always closed to prevent memory leaks
 	defer page.Close()
 
-	// SAAS OPTIMIZATION: Reduced timeout for better throughput
-	// 45 seconds is enough for most sites to render critical JS
-	err := page.Context(ctx).Timeout(45 * time.Second).Navigate(rawURL)
+	// SAAS OPTIMIZATION: Increased timeout for better reliability
+	err := page.Context(ctx).Timeout(60 * time.Second).Navigate(rawURL)
 	if err != nil {
 		return "", "", "", fmt.Errorf("navigate failed: %w", err)
 	}
 
-	// Optimization: Only wait for the page to be ready, don't wait for all images/ads
-	_ = page.WaitDOMStable(1*time.Second, 0.1)
+	// Optimization: Wait a bit longer to ensure dynamic content renders
+	_ = page.WaitDOMStable(3*time.Second, 0.1)
 
 	html, err := page.HTML()
 	if err != nil {
@@ -54,8 +53,31 @@ func (s *UniversalScraper) Scrape(ctx context.Context, rawURL string) (string, s
 		return "", "", "", fmt.Errorf("readability failed: %w", err)
 	}
 
-	if len(article.TextContent) < 300 {
+	if len(article.TextContent) < 100 {
 		return "", "", "", fmt.Errorf("extracted content is too thin")
+	}
+
+	// Security/Quality Gate: Block Bot Protection & Access Denied pages
+	lowerContent := strings.ToLower(article.TextContent)
+	lowerTitle := strings.ToLower(article.Title)
+	
+	blockedPhrases := []string{
+		"access to this page has been denied",
+		"please enable javascript and cookies",
+		"checking your browser before accessing",
+		"cloudflare ray id",
+		"you have been blocked",
+		"security by cloudflare",
+		"verify you are human",
+		"enable javascript",
+		"access denied",
+		"attention required!",
+	}
+
+	for _, phrase := range blockedPhrases {
+		if strings.Contains(lowerContent, phrase) || strings.Contains(lowerTitle, phrase) {
+			return "", "", "", fmt.Errorf("blocked by anti-bot protection (detected phrase: %s)", phrase)
+		}
 	}
 
 	// XSS Prevention: Sanitize the HTML to remove scripts/iframes but keep images and formatting

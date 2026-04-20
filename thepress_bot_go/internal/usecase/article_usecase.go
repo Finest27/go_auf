@@ -141,6 +141,9 @@ func (u *ArticleUseCase) processWithAI(ctx context.Context, art *models.Article,
 		art.MetaDescription = sql.NullString{String: res.MetaDescription, Valid: true}
 		art.Slug = sql.NullString{String: res.Slug, Valid: true}
 		art.ImageAlt = sql.NullString{String: res.ImageAlt, Valid: true}
+		art.FocusKeywords = sql.NullString{String: res.FocusKeywords, Valid: true}
+		art.Category = sql.NullString{String: res.Category, Valid: true}
+		art.Tags = sql.NullString{String: res.Tags, Valid: true}
 		art.RetryCount = 0
 		art.NextRetryAt = sql.NullTime{Valid: false}
 	} else {
@@ -163,6 +166,44 @@ func (u *ArticleUseCase) PublishSingle(ctx context.Context, cfg config.Config, a
 	pub := u.factory.CreatePublisher(cfg)
 
 	finalHTML := u.linker.InjectLinks(ctx, art.ID, art.RewrittenContent.String)
+	art.RewrittenContent.String = finalHTML
+
+	pubLink, pubErr := pub.Publish(art, int(art.CategoryID.Int64))
+	if pubErr != nil {
+		art.Status = "failed"
+		art.RetryCount++
+		art.NextRetryAt = sql.NullTime{Time: time.Now().Add(30 * time.Minute), Valid: true}
+		u.repo.Update(ctx, art)
+		utils.BroadcastLog("[PUBLISHER ERROR] %v", pubErr)
+		return
+	}
+
+	art.Status = "published"
+	art.PublishDate = sql.NullTime{Time: time.Now(), Valid: true}
+	if err := u.repo.Update(ctx, art); err != nil {
+		utils.BroadcastLog("[SYSTEM ERROR] Failed to update article publish status: %v", err)
+	}
+	utils.BroadcastLog("[SUCCESS] Հրապարակված է: %s", pubLink)
+}
+
+func (u *ArticleUseCase) ExecutePublishCycle(ctx context.Context, cfg config.Config, startIndex int) int {
+	if len(cfg.Topics) == 0 {
+		return 0
+	}
+
+	for i := 0; i < len(cfg.Topics); i++ {
+		indexToCheck := (startIndex + i) % len(cfg.Topics)
+		topic := cfg.Topics[indexToCheck]
+
+		art, err := u.repo.GetOneRewrittenByCategory(ctx, topic.WPCategoryID)
+		if err == nil && art != nil {
+			u.PublishSingle(ctx, cfg, art)
+			return (indexToCheck + 1) % len(cfg.Topics)
+		}
+	}
+	return startIndex
+}
+ art.RewrittenContent.String)
 	art.RewrittenContent.String = finalHTML
 
 	pubLink, pubErr := pub.Publish(art, int(art.CategoryID.Int64))

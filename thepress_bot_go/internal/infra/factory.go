@@ -15,6 +15,9 @@ func NewDefaultProviderFactory() *DefaultProviderFactory {
 }
 
 func (f *DefaultProviderFactory) CreateAI(cfg config.Config) services.AIProvider {
+	if cfg.AI.Tool == "modelslab" {
+		return ai.NewModelsLabProvider(cfg.AI.ModelsLabKey)
+	}
 	return ai.NewNvidiaProvider(cfg.AI.NvidiaAPIKey, cfg.Prompts.SystemPromptNvidia)
 }
 

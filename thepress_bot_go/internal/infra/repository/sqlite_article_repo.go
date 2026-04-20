@@ -43,10 +43,10 @@ func (r *SQLiteArticleRepository) Update(ctx context.Context, a *models.Article)
 	defer r.mu.Unlock()
 
 	query := `UPDATE articles SET status = ?, rewritten_content = ?, meta_description = ?, focus_keywords = ?,
-                slug = ?, category = ?, tags = ?, image_alt = ?, category_id = ?, retry_count = ?, next_retry_at = ?
+                slug = ?, category = ?, tags = ?, image_alt = ?, category_id = ?, retry_count = ?, next_retry_at = ?, publish_date = ?
                 WHERE id = ?`
 	_, err := r.db.ExecContext(ctx, query, a.Status, a.RewrittenContent, a.MetaDescription, a.FocusKeywords,
-		a.Slug, a.Category, a.Tags, a.ImageAlt, a.CategoryID, a.RetryCount, a.NextRetryAt, a.ID)
+		a.Slug, a.Category, a.Tags, a.ImageAlt, a.CategoryID, a.RetryCount, a.NextRetryAt, a.PublishDate, a.ID)
 
 	if err == nil {
 		go utils.BroadcastEvent("queue_update", nil)
