@@ -1,9 +1,10 @@
-﻿package api
+package api
 
 import (
 	"context"
 	"embed"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"thepress_bot_go/internal/config"
@@ -39,11 +40,22 @@ func NewServer(onStart, onStop func(), repo *repository.SQLiteArticleRepository,
 
 	app.Use(recover.New())
 
-	// Implement Basic Auth (admin:admin as default per documentation)
-	// For production, these credentials should be configurable via env vars or the DB.
+	// Implement Basic Auth with environment variables
+	adminUser := os.Getenv("ADMIN_USER")
+	if adminUser == "" {
+		adminUser = "admin"
+	}
+	adminPass := os.Getenv("ADMIN_PASS")
+	if adminPass == "" {
+		adminPass = "admin"
+	}
+
 	app.Use(basicauth.New(basicauth.Config{
+		Next: func(c *fiber.Ctx) bool {
+			return c.Path() == "/ws/logs"
+		},
 		Users: map[string]string{
-			"admin": "admin",
+			adminUser: adminPass,
 		},
 		Realm: "ThePressUSA Control Panel",
 	}))
@@ -62,7 +74,7 @@ func NewServer(onStart, onStop func(), repo *repository.SQLiteArticleRepository,
 	api.Get("/settings", s.handleGetSettings)
 	api.Post("/settings", s.handlePostSettings)
 	api.Get("/analytics", s.handleGetAnalytics)
-	
+
 	api.Get("/queue", s.handleGetQueue)
 	api.Get("/queue/:id", s.handleGetQueueItem)
 	api.Put("/queue/:id", s.handleUpdateQueueItem)
@@ -89,8 +101,18 @@ func NewServer(onStart, onStop func(), repo *repository.SQLiteArticleRepository,
 	return s
 }
 
+func (s *Server) SetBotRunning(running bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.isBotRunning = running
+}
+
 func (s *Server) handleGetQueueItem(c *fiber.Ctx) error {
-	id, _ := strconv.ParseInt(c.Params("id"), 10, 64)
+	idStr := c.Params("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid ID"})
+	}
 	art, err := s.articleRepo.GetByID(c.Context(), id)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Article not found"})
@@ -99,7 +121,11 @@ func (s *Server) handleGetQueueItem(c *fiber.Ctx) error {
 }
 
 func (s *Server) handleUpdateQueueItem(c *fiber.Ctx) error {
-	id, _ := strconv.ParseInt(c.Params("id"), 10, 64)
+	idStr := c.Params("id")
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid ID"})
+	}
 	art, err := s.articleRepo.GetByID(c.Context(), id)
 	if err != nil {
 		return c.Status(404).JSON(fiber.Map{"error": "Article not found"})
@@ -129,7 +155,7 @@ func (s *Server) handlePublishItem(c *fiber.Ctx) error {
 		ID int64 `json:"id"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return err
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid body"})
 	}
 
 	art, err := s.articleRepo.GetByID(c.Context(), body.ID)
@@ -140,7 +166,7 @@ func (s *Server) handlePublishItem(c *fiber.Ctx) error {
 	cfg := config.Get()
 	go func() {
 		bgCtx := context.Background()
-		utils.BroadcastLog("[MANUAL] Հրապարակվում է հոդվածը #%d: %s", art.ID, art.Title)
+		utils.BroadcastLog("[MANUAL] Publishing article #%d: %s", art.ID, art.Title)
 		s.useCase.PublishSingle(bgCtx, cfg, art)
 	}()
 
@@ -172,7 +198,7 @@ func (s *Server) handleDeleteItem(c *fiber.Ctx) error {
 		ID int64 `json:"id"`
 	}
 	if err := c.BodyParser(&body); err != nil {
-		return err
+		return c.Status(400).JSON(fiber.Map{"error": "Invalid body"})
 	}
 	err := s.articleRepo.Delete(c.Context(), body.ID)
 	if err != nil {
@@ -210,7 +236,9 @@ func (s *Server) handleToggle(c *fiber.Ctx) error {
 }
 
 func (s *Server) handleGetSettings(c *fiber.Ctx) error {
-	config.Load()
+	if err := config.Load(); err != nil {
+		return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+	}
 	return c.JSON(config.Get())
 }
 

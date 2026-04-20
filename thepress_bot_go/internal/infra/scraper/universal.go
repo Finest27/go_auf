@@ -43,7 +43,10 @@ func (s *UniversalScraper) Scrape(ctx context.Context, rawURL string) (string, s
 		return "", "", "", fmt.Errorf("failed to get HTML: %w", err)
 	}
 
-	parsedURL, _ := url.Parse(rawURL)
+	parsedURL, err := url.Parse(rawURL)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to parse url: %w", err)
+	}
 
 	// Use readability to extract the CORE content (removes menus, footers, ads)
 	article, err := readability.FromReader(strings.NewReader(html), parsedURL)

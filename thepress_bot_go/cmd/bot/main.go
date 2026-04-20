@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"thepress_bot_go/internal/config"
+	"thepress_bot_go/internal/infra"
 	"thepress_bot_go/internal/infra/api"
 	"thepress_bot_go/internal/infra/database"
 	"thepress_bot_go/internal/infra/publisher"
@@ -24,10 +25,15 @@ type BotRunner struct {
 	cancelFunc context.CancelFunc
 	ctx        context.Context
 	useCase    *usecase.ArticleUseCase
+	server     *api.Server
 }
 
 func NewBotRunner(uc *usecase.ArticleUseCase) *BotRunner {
 	return &BotRunner{useCase: uc}
+}
+
+func (r *BotRunner) SetServer(s *api.Server) {
+	r.server = s
 }
 
 func (r *BotRunner) Start() {
@@ -39,12 +45,16 @@ func (r *BotRunner) Start() {
 	}
 
 	r.ctx, r.cancelFunc = context.WithCancel(context.Background())
-	
+
+	if r.server != nil {
+		r.server.SetBotRunning(true)
+	}
+
 	// Broadcast status update
 	utils.BroadcastEvent("status_update", map[string]bool{"running": true})
-	
-go r.runScrapeLoop(r.ctx)
-go r.runPublishLoop(r.ctx)
+
+	go r.runScrapeLoop(r.ctx)
+	go r.runPublishLoop(r.ctx)
 }
 
 func (r *BotRunner) Stop() {
@@ -55,7 +65,11 @@ func (r *BotRunner) Stop() {
 		r.cancelFunc()
 		r.cancelFunc = nil
 	}
-	
+
+	if r.server != nil {
+		r.server.SetBotRunning(false)
+	}
+
 	// Broadcast status update
 	utils.BroadcastEvent("status_update", map[string]bool{"running": false})
 }
@@ -64,20 +78,26 @@ func main() {
 	utils.BroadcastLog("[KERNEL] Initializing Ultimate Engine v4.5 (Live Mode)...")
 
 	// Make sure the path is dynamic based on the executable or current dir
-	dbPath := "bot_ultimate.db"
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "bot_ultimate.db"
+	}
 	db := database.NewSQLiteDB(dbPath)
 	config.InitDB(db)
 
 	if err := config.Load(); err != nil {
-		utils.BroadcastLog("[SYSTEM] Failed to load config, using defaults.")
+		utils.BroadcastLog("[SYSTEM] Failed to load config: %v", err)
 	}
 
 	articleRepo := repository.NewSQLiteArticleRepository(db)
 	linker := publisher.NewInternalLinker(articleRepo)
-	articleUC := usecase.NewArticleUseCase(articleRepo, linker)
+	providerFactory := infra.NewDefaultProviderFactory()
+	articleUC := usecase.NewArticleUseCase(articleRepo, linker, providerFactory)
 	runner := NewBotRunner(articleUC)
 
 	server := api.NewServer(runner.Start, runner.Stop, articleRepo, articleUC)
+	// auto-start is disabled via user request
+	runner.SetServer(server)
 
 	go func() {
 		sigChan := make(chan os.Signal, 1)
@@ -88,13 +108,19 @@ func main() {
 		os.Exit(0)
 	}()
 
+	portStr := os.Getenv("PORT")
 	port := 8080
+	if portStr != "" {
+		fmt.Sscanf(portStr, "%d", &port)
+	}
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
 		utils.BroadcastLog("[SYSTEM] Launching Interface at %s", url)
-		_ = utils.OpenBrowser(url)
+		if err := utils.OpenBrowser(url); err != nil {
+			utils.BroadcastLog("[SYSTEM] Failed to open browser: %v", err)
+		}
 	}()
 
 	fmt.Printf("\n--- ThePress Bot Ultimate ---\n")
@@ -105,20 +131,22 @@ func main() {
 }
 
 func (r *BotRunner) runScrapeLoop(ctx context.Context) {
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-			config.Load()
-			cfg := config.Get()
-			utils.BroadcastLog("--- [SCRAPE CYCLE START] ---")
-			r.useCase.ExecuteScrapeCycle(ctx, cfg)
+        currentTopicIndex := 0
+        for {
+                select {
+                case <-ctx.Done():
+                        return
+                default:
+                        // Optimization: only load config if needed or with some interval     
+                        cfg := config.Get()
+                        utils.BroadcastLog("--- [SCRAPE CYCLE START] ---")
+                        currentTopicIndex = r.useCase.ExecuteScrapeCycle(ctx, cfg, currentTopicIndex)
 
-			interval := time.Duration(cfg.Bot.RunIntervalMinutes) * time.Minute
-			if interval < 5*time.Minute {
-				interval = 5 * time.Minute
+			intervalMinutes := cfg.Bot.RunIntervalMinutes
+			if intervalMinutes < 5 {
+				intervalMinutes = 5
 			}
+			interval := time.Duration(intervalMinutes) * time.Minute
 			utils.BroadcastLog("--- [SCRAPE CYCLE END] Sleeping %v ---", interval)
 
 			timer := time.NewTimer(interval)
@@ -141,7 +169,6 @@ func (r *BotRunner) runPublishLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			config.Load()
 			cfg := config.Get()
 
 			if cfg.Bot.AutoPublish {
@@ -167,3 +194,4 @@ func (r *BotRunner) runPublishLoop(ctx context.Context) {
 		}
 	}
 }
+

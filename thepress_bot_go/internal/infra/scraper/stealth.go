@@ -1,4 +1,4 @@
-package scraper
+﻿package scraper
 
 import (
 	"fmt"
@@ -30,16 +30,10 @@ func NewStealthBrowser() (*rod.Browser, error) {
 
 func PreparePage(b *rod.Browser) *rod.Page {
 	ua := utils.GetRandomUserAgent()
-	
-	incognitoBrowser, err := b.Incognito()
-	var targetBrowser *rod.Browser
-	if err == nil && incognitoBrowser != nil {
-		targetBrowser = incognitoBrowser
-	} else {
-		targetBrowser = b
-	}
 
-	page := stealth.MustPage(targetBrowser)
+	// Simplified: Use the browser directly to avoid Incognito context leaks
+	// since we already create a fresh browser for every cycle.
+	page := stealth.MustPage(b)
 
 	page.MustSetUserAgent(&proto.NetworkSetUserAgentOverride{
 		UserAgent:      ua,

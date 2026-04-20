@@ -46,7 +46,10 @@ func (m *ModelsLabProvider) ProcessImage(ctx context.Context, imageBytes []byte,
 		"guidance_scale":  7.5,
 	}
 
-	jsonData, _ := json.Marshal(bodyData)
+	jsonData, err := json.Marshal(bodyData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal modelslab request: %w", err)
+	}
 	resp, err := m.Client.Post(url, "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return nil, err
@@ -54,7 +57,10 @@ func (m *ModelsLabProvider) ProcessImage(ctx context.Context, imageBytes []byte,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		b, _ := io.ReadAll(resp.Body)
+		b, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("ModelsLab error %d: could not read body: %v", resp.StatusCode, err)
+		}
 		return nil, fmt.Errorf("ModelsLab error %d: %s", resp.StatusCode, string(b))
 	}
 

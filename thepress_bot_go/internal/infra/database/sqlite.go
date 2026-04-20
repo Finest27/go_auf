@@ -75,14 +75,22 @@ func NewSQLiteDB(dbPath string) *sqlx.DB {
 	CREATE INDEX IF NOT EXISTS idx_articles_source_url ON articles(source_url);
 	CREATE INDEX IF NOT EXISTS idx_articles_created_at ON articles(created_at DESC);
 	`
-	db.MustExec(schema)
+	if _, err := db.Exec(schema); err != nil {
+		log.Fatalf("Failed to create schema: %v", err)
+	}
 
-	// Schema Updates (Safe Migrations)
-	db.Exec("ALTER TABLE app_settings ADD COLUMN system_prompt_nvidia TEXT;")
-	db.Exec("ALTER TABLE app_settings ADD COLUMN system_prompt_modelslab TEXT;")
-	db.Exec("ALTER TABLE articles ADD COLUMN category_id INTEGER;")
-	db.Exec("ALTER TABLE articles ADD COLUMN retry_count INTEGER DEFAULT 0;")
-	db.Exec("ALTER TABLE articles ADD COLUMN next_retry_at DATETIME;")
+	// Schema Updates (Safe Migrations - check error but don't fail if column already exists)
+	updates := []string{
+		"ALTER TABLE app_settings ADD COLUMN system_prompt_nvidia TEXT;",
+		"ALTER TABLE app_settings ADD COLUMN system_prompt_modelslab TEXT;",
+		"ALTER TABLE articles ADD COLUMN category_id INTEGER;",
+		"ALTER TABLE articles ADD COLUMN retry_count INTEGER DEFAULT 0;",
+		"ALTER TABLE articles ADD COLUMN next_retry_at DATETIME;",
+	}
+
+	for _, update := range updates {
+		_, _ = db.Exec(update) // SQLite doesn't support 'IF NOT EXISTS' for columns, so we ignore errors here
+	}
 
 	return db
 }

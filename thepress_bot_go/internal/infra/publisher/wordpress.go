@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"regexp"
 	"sync"
 	"time"
 
@@ -63,11 +64,13 @@ func (wp *WPClient) UploadImageFromURL(imageURL, altText string) (int, error) {
 	defer os.Remove(temp)
 
 	if wp.AI != nil {
-		imgBytes, _ := os.ReadFile(temp)
-		utils.BroadcastLog("[AI] Մշակվում է նկարը...")
-		processed, err := wp.AI.ProcessImage(context.Background(), imgBytes, "Clean news photo")
+		imgBytes, err := os.ReadFile(temp)
 		if err == nil {
-			os.WriteFile(temp, processed, 0644)
+			utils.BroadcastLog("[AI] Մշակվում է նկարը...")
+			processed, err := wp.AI.ProcessImage(context.Background(), imgBytes, "Clean news photo")
+			if err == nil {
+				_ = os.WriteFile(temp, processed, 0644)
+			}
 		}
 	}
 
@@ -84,11 +87,19 @@ func (wp *WPClient) UploadImageToMediaLibrary(imagePath, altText string) (int, s
 
 	body := &bytes.Buffer{}
 	writer := multipart.NewWriter(body)
-	part, _ := writer.CreateFormFile("file", filepath.Base(imagePath))
-	io.Copy(part, file)
+	part, err := writer.CreateFormFile("file", filepath.Base(imagePath))
+	if err != nil {
+		return 0, "", err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return 0, "", err
+	}
 	writer.Close()
 
-	req, _ := http.NewRequest("POST", wp.BaseURL+"/wp-json/wp/v2/media", body)
+	req, err := http.NewRequest("POST", wp.BaseURL+"/wp-json/wp/v2/media", body)
+	if err != nil {
+		return 0, "", err
+	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	req.Header.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(imagePath)))
 
@@ -102,14 +113,21 @@ func (wp *WPClient) UploadImageToMediaLibrary(imagePath, altText string) (int, s
 		ID        int    `json:"id"`
 		SourceURL string `json:"source_url"`
 	}
-	json.NewDecoder(resp.Body).Decode(&res)
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return 0, "", err
+	}
 
 	if altText != "" {
 		buf := &bytes.Buffer{}
-		json.NewEncoder(buf).Encode(map[string]string{"alt_text": altText})
-		reqUpdate, _ := http.NewRequest("POST", fmt.Sprintf("%s/wp-json/wp/v2/media/%d", wp.BaseURL, res.ID), buf)
-		reqUpdate.Header.Set("Content-Type", "application/json")
-		wp.doRequest(reqUpdate)
+		_ = json.NewEncoder(buf).Encode(map[string]string{"alt_text": altText})
+		reqUpdate, err := http.NewRequest("POST", fmt.Sprintf("%s/wp-json/wp/v2/media/%d", wp.BaseURL, res.ID), buf)
+		if err == nil {
+			reqUpdate.Header.Set("Content-Type", "application/json")
+			updateResp, err := wp.doRequest(reqUpdate)
+			if err == nil {
+				updateResp.Body.Close()
+			}
+		}
 	}
 
 	return res.ID, res.SourceURL, nil
@@ -129,8 +147,8 @@ func (wp *WPClient) ProcessInlineImages(html string) (string, error) {
 	var wg sync.WaitGroup
 
 	doc.Find("img").Each(func(_ int, s *goquery.Selection) {
-		src, _ := s.Attr("src")
-		if src == "" || strings.Contains(src, wp.BaseURL) {
+		src, exists := s.Attr("src")
+		if !exists || src == "" || strings.Contains(src, wp.BaseURL) {
 			return
 		}
 		wg.Add(1)
@@ -159,15 +177,37 @@ func (wp *WPClient) ProcessInlineImages(html string) (string, error) {
 }
 
 func (wp *WPClient) Publish(article *models.Article, catID int) (string, error) {
+        finalTitle := article.Title
+        finalContent := article.RewrittenContent.String
+        
+        re := regexp.MustCompile("(?i)<h1>(.*?)</h1>")
+        matches := re.FindStringSubmatch(finalContent)
+        if len(matches) > 1 {
+                finalTitle = matches[1]
+                finalContent = re.ReplaceAllString(finalContent, "")
+        }
+        article.Title = finalTitle
+        article.RewrittenContent.String = finalContent
+
 	utils.BroadcastLog("[PUBLISHER] Ուղարկվում է WordPress -> %s", article.Title)
-	content, _ := wp.ProcessInlineImages(article.RewrittenContent.String)
+	content, err := wp.ProcessInlineImages(article.RewrittenContent.String)
+	if err != nil {
+		// Log but continue with original rewritten content if processing inline images fails
+		utils.BroadcastLog("[PUBLISHER WARNING] Failed to process inline images: %v", err)
+		content = article.RewrittenContent.String
+	}
 	
 	featID := 0
 	if article.ImageURL.Valid {
-		featID, _ = wp.UploadImageFromURL(article.ImageURL.String, article.ImageAlt.String)
+		id, err := wp.UploadImageFromURL(article.ImageURL.String, article.ImageAlt.String)
+		if err == nil {
+			featID = id
+		} else {
+			utils.BroadcastLog("[PUBLISHER WARNING] Failed to upload featured image: %v", err)
+		}
 	}
 
-	payload, _ := json.Marshal(map[string]interface{}{
+	payload, err := json.Marshal(map[string]interface{}{
 		"title":          article.Title,
 		"content":        content,
 		"status":         "publish",
@@ -176,8 +216,14 @@ func (wp *WPClient) Publish(article *models.Article, catID int) (string, error) 
 		"featured_media": featID,
 		"slug":           article.Slug.String,
 	})
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal payload: %w", err)
+	}
 
-	req, _ := http.NewRequest("POST", wp.BaseURL+"/wp-json/wp/v2/posts", bytes.NewBuffer(payload))
+	req, err := http.NewRequest("POST", wp.BaseURL+"/wp-json/wp/v2/posts", bytes.NewBuffer(payload))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := wp.doRequest(req)
 	if err != nil {
@@ -185,9 +231,17 @@ func (wp *WPClient) Publish(article *models.Article, catID int) (string, error) 
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("wordpress returned status %d: %s", resp.StatusCode, string(b))
+	}
+
 	var result struct {
 		Link string `json:"link"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
 	return result.Link, nil
 }
+

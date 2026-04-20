@@ -30,8 +30,8 @@ func FetchRSSLinks(ctx context.Context, browser *rod.Browser, url string) ([]str
 	}
 
 	for _, sel := range consentButtons {
-		has, _, _ := page.Has(sel)
-		if has {
+		has, _, err := page.Has(sel)
+		if err == nil && has {
 			if el, err := page.Element(sel); err == nil {
 				utils.BroadcastLog("[RSS] Found consent wall, bypassing...")
 				_ = el.Click("left", 1)

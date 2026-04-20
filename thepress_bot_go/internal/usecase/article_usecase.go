@@ -3,92 +3,138 @@
 import (
 	"context"
 	"database/sql"
-	"sync"
-	"thepress_bot_go/internal/config"
+		"thepress_bot_go/internal/config"
 	"thepress_bot_go/internal/domain/models"
+	"thepress_bot_go/internal/domain/repository"
 	"thepress_bot_go/internal/domain/services"
-	"thepress_bot_go/internal/infra/ai"
-	"thepress_bot_go/internal/infra/publisher"
-	"thepress_bot_go/internal/infra/repository"
-	"thepress_bot_go/internal/infra/scraper"
 	"thepress_bot_go/internal/infra/utils"
 	"time"
 )
 
+type ProviderFactory interface {
+	CreateAI(cfg config.Config) services.AIProvider
+	CreatePublisher(cfg config.Config) services.Publisher
+	CreateScraper() (services.ScraperService, error)
+}
+
 type ArticleUseCase struct {
-	repo   *repository.SQLiteArticleRepository
-	linker *publisher.InternalLinker
+	repo    repository.ArticleRepository
+	linker  services.Linker
+	factory ProviderFactory
 }
 
-func NewArticleUseCase(repo *repository.SQLiteArticleRepository, linker *publisher.InternalLinker) *ArticleUseCase {
+func NewArticleUseCase(repo repository.ArticleRepository, linker services.Linker, factory ProviderFactory) *ArticleUseCase {
 	return &ArticleUseCase{
-		repo:   repo,
-		linker: linker,
+		repo:    repo,
+		linker:  linker,
+		factory: factory,
 	}
 }
 
-func (u *ArticleUseCase) ExecuteScrapeCycle(ctx context.Context, cfg config.Config) {
-	nvidia := ai.NewNvidiaProvider(cfg.AI.NvidiaAPIKey, cfg.Prompts.SystemPromptNvidia)
+func (u *ArticleUseCase) ExecuteScrapeCycle(ctx context.Context, cfg config.Config, startIndex int) int {
+        _, pendingRewritten, failedCount, err := u.repo.GetStats(ctx)
+        if err == nil {
+                if failedCount > 0 {
+                        failedArticles, err := u.repo.GetFailed(ctx, 1)
+                        if err == nil && len(failedArticles) > 0 {
+                                art := failedArticles[0]
+                                utils.BroadcastLog("[RETRY] Կրկնակի փորձ վերաշարադրելու հոդվածը (#%d): %s", art.RetryCount+1, art.Title)
+                                u.processWithAI(ctx, &art, u.factory.CreateAI(cfg))
+                                return startIndex
+                        }
+                }
 
-	failedArticles, _ := u.repo.GetFailed(ctx, 10)
-	for _, art := range failedArticles {
-		utils.BroadcastLog("[RETRY] Փորձում ենք վերամշակել հոդվածը (#%d): %s", art.RetryCount+1, art.Title)
-		u.processWithAI(ctx, &art, nvidia)
-	}
+                if pendingRewritten > 0 {
+                        utils.BroadcastLog("[SCRAPE] Կա սպասող հոդված (%d հատ): Սպասում ենք հրապարակմանը...", pendingRewritten)
+                        return startIndex
+                }
+        }
 
-	for _, topic := range cfg.Topics {
-		select {
-		case <-ctx.Done(): return
-		default:
-			utils.BroadcastLog("[SYSTEM] Ստուգում ենք նորություններ: %s", topic.Name)
-			browser, err := scraper.NewStealthBrowser()
-			if err != nil { continue }
+        aiProv := u.factory.CreateAI(cfg)
 
-			links, err := scraper.FetchRSSLinks(ctx, browser, topic.RSSURL)
-			if err != nil { browser.Close(); continue }
+        if len(cfg.Topics) == 0 {
+                return 0
+        }
 
-			universal := scraper.NewUniversalScraper(browser)
-			var wg sync.WaitGroup
-			sem := make(chan struct{}, 3)
+        for i := 0; i < len(cfg.Topics); i++ {
+                indexToCheck := (startIndex + i) % len(cfg.Topics)
+                topic := cfg.Topics[indexToCheck]
 
-			for _, link := range links {
-				if exists, _ := u.repo.Exists(ctx, link); exists { continue }
+                select {
+                case <-ctx.Done():
+                        return startIndex
+                default:
+                        utils.BroadcastLog("[SYSTEM] Ստուգում ենք RSS թեման: %s", topic.Name) 
+                        scraperService, err := u.factory.CreateScraper()
+                        if err != nil {
+                                utils.BroadcastLog("[SYSTEM ERROR] Failed to create scraper: %v", err)
+                                continue
+                        }
 
-				wg.Add(1)
-				sem <- struct{}{}
-				go func(targetLink string, catID int) {
-					defer wg.Done()
-					defer func() { <-sem }()
+                        processedOne := false
+                        func() {
+                                defer scraperService.Close()
 
-					scrapeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-					defer cancel()
+                                links, err := scraperService.FetchRSSLinks(ctx, topic.RSSURL) 
+                                if err != nil {
+                                        utils.BroadcastLog("[SYSTEM ERROR] Failed to fetch links for %s: %v", topic.Name, err)
+                                        return
+                                }
 
-					title, content, image, err := universal.Scrape(scrapeCtx, targetLink)
-					if err != nil || len(content) < cfg.Advanced.MinArticleLen { return }
+                                for _, link := range links {
+                                        exists, err := u.repo.Exists(ctx, link)
+                                        if err != nil {
+                                                utils.BroadcastLog("[SYSTEM ERROR] DB error checking exists: %v", err)
+                                                continue
+                                        }
+                                        if exists {
+                                                continue
+                                        }
 
-					art := &models.Article{
-						Title:      title,
-						Content:    content,
-						SourceURL:  targetLink,
-						ImageURL:   sql.NullString{String: image, Valid: image != ""},
-						Status:     "pending",
-						CategoryID: sql.NullInt64{Int64: int64(catID), Valid: true},
-					}
-					u.repo.Save(ctx, art)
-					u.processWithAI(ctx, art, nvidia)
-				}(link, topic.WPCategoryID)
-			}
-			wg.Wait()
-			browser.Close()
-		}
-	}
+                                        scrapeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+                                        title, content, image, err := scraperService.ScrapeArticle(scrapeCtx, link)
+                                        cancel()
+
+                                        if err != nil {
+                                                continue
+                                        }
+
+                                        if len(content) < cfg.Advanced.MinArticleLen {        
+                                                continue
+                                        }
+
+                                        art := &models.Article{
+                                                Title:      title,
+                                                Content:    content,
+                                                SourceURL:  link,
+                                                ImageURL:   sql.NullString{String: image, Valid: image != ""},
+                                                Status:     "pending",
+                                                CategoryID: sql.NullInt64{Int64: int64(topic.WPCategoryID), Valid: true},
+                                        }
+                                        if err := u.repo.Save(ctx, art); err != nil {
+                                                utils.BroadcastLog("[SYSTEM ERROR] Failed to save article: %v", err)
+                                                return
+                                        }
+
+                                        u.processWithAI(ctx, art, aiProv)
+                                        processedOne = true
+                                        return
+                                }
+                        }()
+
+                        if processedOne {
+                                return (indexToCheck + 1) % len(cfg.Topics)
+                        }
+                }
+        }
+        return startIndex
 }
 
-func (u *ArticleUseCase) processWithAI(ctx context.Context, art *models.Article, nvidia *ai.NvidiaProvider) {
-	aiCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+func (u *ArticleUseCase) processWithAI(ctx context.Context, art *models.Article, aiProv services.AIProvider) {
+	aiCtx, cancel := context.WithTimeout(ctx, 300*time.Second)
 	defer cancel()
 
-	res, err := nvidia.ProcessArticle(aiCtx, art.Title, art.Content)
+	res, err := aiProv.ProcessArticle(aiCtx, art.Title, art.Content)
 	if err == nil && res != nil {
 		art.Status = "rewritten"
 		art.RewrittenContent = sql.NullString{String: res.RewrittenContent, Valid: true}
@@ -106,26 +152,20 @@ func (u *ArticleUseCase) processWithAI(ctx context.Context, art *models.Article,
 			delay = backoff[art.RetryCount-1]
 		}
 		art.NextRetryAt = sql.NullTime{Time: time.Now().Add(delay), Valid: true}
-		utils.BroadcastLog("[AI ERROR] %v. Հոդված #%d կփորձվի %v հետո:", err, art.RetryCount, delay)
+		utils.BroadcastLog("[AI ERROR] %v. Հոդված #%d կփորձվի %v հետո", err, art.RetryCount, delay)
 	}
-	u.repo.Update(ctx, art)
+	if err := u.repo.Update(ctx, art); err != nil {
+		utils.BroadcastLog("[SYSTEM ERROR] Failed to update article AI status: %v", err)
+	}
 }
 
 func (u *ArticleUseCase) PublishSingle(ctx context.Context, cfg config.Config, art *models.Article) {
-	nvidia := ai.NewNvidiaProvider(cfg.AI.NvidiaAPIKey, cfg.Prompts.SystemPromptNvidia)
-	var imageProvider services.AIProvider
-	if cfg.AI.ModelsLabKey != "" {
-		imageProvider = ai.NewModelsLabProvider(cfg.AI.ModelsLabKey)
-	} else {
-		imageProvider = nvidia
-	}
+	pub := u.factory.CreatePublisher(cfg)
 
-	wp := publisher.NewWPClient(cfg.WordPress.URL, cfg.WordPress.Username, cfg.WordPress.AppPassword, imageProvider)
-	
 	finalHTML := u.linker.InjectLinks(ctx, art.ID, art.RewrittenContent.String)
 	art.RewrittenContent.String = finalHTML
 
-	pubLink, pubErr := wp.Publish(art, int(art.CategoryID.Int64))
+	pubLink, pubErr := pub.Publish(art, int(art.CategoryID.Int64))
 	if pubErr != nil {
 		art.Status = "failed"
 		art.RetryCount++
@@ -137,12 +177,16 @@ func (u *ArticleUseCase) PublishSingle(ctx context.Context, cfg config.Config, a
 
 	art.Status = "published"
 	art.PublishDate = sql.NullTime{Time: time.Now(), Valid: true}
-	u.repo.Update(ctx, art)
+	if err := u.repo.Update(ctx, art); err != nil {
+		utils.BroadcastLog("[SYSTEM ERROR] Failed to update article publish status: %v", err)
+	}
 	utils.BroadcastLog("[SUCCESS] Հրապարակված է: %s", pubLink)
 }
 
 func (u *ArticleUseCase) ExecutePublishCycle(ctx context.Context, cfg config.Config, startIndex int) int {
-	if len(cfg.Topics) == 0 { return 0 }
+	if len(cfg.Topics) == 0 {
+		return 0
+	}
 
 	for i := 0; i < len(cfg.Topics); i++ {
 		indexToCheck := (startIndex + i) % len(cfg.Topics)

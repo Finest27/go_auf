@@ -31,7 +31,7 @@ func NewNvidiaProvider(apiKey, sysPrompt string) *NvidiaProvider {
 			"nvidia/nemotron-4-340b-instruct",
 		},
 		ImageModel: "stabilityai/sdxl-turbo",
-		Client:     &http.Client{Timeout: 120 * time.Second},
+		Client:     &http.Client{Timeout: 300 * time.Second},
 	}
 }
 
@@ -46,8 +46,14 @@ func (n *NvidiaProvider) ProcessImage(ctx context.Context, imageBytes []byte, pr
 		"sampler":        "K_EULER_ANCESTRAL",
 		"steps":          2,
 	}
-	reqBody, _ := json.Marshal(bodyData)
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
+	reqBody, err := json.Marshal(bodyData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+n.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := n.Client.Do(req)
@@ -59,7 +65,9 @@ func (n *NvidiaProvider) ProcessImage(ctx context.Context, imageBytes []byte, pr
 			Base64 string `json:"base64"`
 		} `json:"artifacts"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
 	if len(result.Artifacts) == 0 { return nil, fmt.Errorf("no image returned") }
 	return base64.StdEncoding.DecodeString(result.Artifacts[0].Base64)
 }
@@ -109,8 +117,14 @@ func (n *NvidiaProvider) tryModel(ctx context.Context, url, model, prompt string
 }
 
 func (n *NvidiaProvider) executeRequest(ctx context.Context, url string, bodyData interface{}) (string, error) {
-	bodyBytes, _ := json.Marshal(bodyData)
-	req, _ := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	bodyBytes, err := json.Marshal(bodyData)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(bodyBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
 	req.Header.Set("Authorization", "Bearer "+n.APIKey)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := n.Client.Do(req)
@@ -128,7 +142,9 @@ func (n *NvidiaProvider) executeRequest(ctx context.Context, url string, bodyDat
 			} `json:"message"`
 		} `json:"choices"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", fmt.Errorf("failed to decode response: %w", err)
+	}
 	if len(result.Choices) == 0 { return "", fmt.Errorf("no response") }
 	return result.Choices[0].Message.Content, nil
 }

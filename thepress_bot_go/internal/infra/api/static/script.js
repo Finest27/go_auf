@@ -26,11 +26,13 @@ function initWS() {
                 addLog(data.message, data.timestamp);
             } else if (data.type === "queue_update") {
                 pollQueue();
+                loadAnalytics();
+            } else if (data.type === "settings_update") {
+                loadSettings();
             } else if (data.type === "status_update") {
                 updateUI(data.data.running);
             }
         } catch (e) {
-            // fallback for plain text logs
             addLog(event.data);
         }
     };
@@ -69,9 +71,9 @@ function switchView(viewName) {
     if (navBtn) navBtn.classList.add('active');
 
     if (queueInterval) clearInterval(queueInterval);
-    
+
     if (viewName === 'queue') {
-        pollQueue();
+        pollQueue(); loadAnalytics();
     }
     if (viewName === 'settings' || viewName === 'prompts' || viewName === 'dashboard') loadSettings();
     if (viewName === 'analytics') loadAnalytics();
@@ -98,9 +100,9 @@ async function loadSettings() {
             document.getElementById('set-prompt-system-modelslab').value = settings.prompts?.system_prompt_modelslab || "";
         }
 
-        if (footerWpUrl) footerWpUrl.innerText = settings.wordpress?.url || "Սահմանված չէ";
+        if (footerWpUrl) footerWpUrl.innerText = settings.wordpress?.url || "Կարգավորված չէ";
         if (footerAiEngine) {
-            let textModel = "Gemma-3 (Nvidia NIM)";
+            let textModel = "Llama 3.1 (Nvidia NIM)";
             let imgModel = settings.ai?.modelslab_api_key ? 'ModelsLab SDXL' : 'Nvidia ImageGen';
             footerAiEngine.innerText = `${textModel} / ${imgModel}`;
         }
@@ -123,7 +125,7 @@ function addTopic(data = {name:'', wp_category_id:1, rss_url:''}) {
     const div = document.createElement('div');
     div.className = 'grid grid-cols-1 md:grid-cols-12 gap-4 items-end bg-white/5 p-5 rounded-2xl border border-white/5 mb-4';
     div.innerHTML = `
-        <div class="md:col-span-3"><label class="block text-[9px] font-bold uppercase text-slate-500 mb-2">Անուն</label><input type="text" class="topic-name w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white" value="${escapeHTML(data.name)}"></div>
+        <div class="md:col-span-3"><label class="block text-[9px] font-bold uppercase text-slate-500 mb-2">Անվանում</label><input type="text" class="topic-name w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white" value="${escapeHTML(data.name)}"></div>
         <div class="md:col-span-2"><label class="block text-[9px] font-bold uppercase text-slate-500 mb-2">WP ID</label><input type="number" class="topic-cat w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white" value="${escapeHTML(data.wp_category_id)}"></div>
         <div class="md:col-span-6"><label class="block text-[9px] font-bold uppercase text-slate-500 mb-2">RSS Հղում</label><input type="url" class="topic-rss w-full bg-black/40 border border-white/10 rounded-xl p-3 text-sm text-white" value="${escapeHTML(data.rss_url)}"></div>
         <div class="md:col-span-1 flex justify-center"><button type="button" class="text-slate-500 hover:text-rose-500 p-3" onclick="this.closest('.grid').remove()"><i class="fa-solid fa-trash"></i></button></div>
@@ -174,8 +176,8 @@ async function saveSettings(e) {
         };
 
         const r = await fetch("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cfg) });
-        if (r.ok) { showToast("Կարգավորումները պահպանված են", "success"); loadSettings(); }
-    } catch(e) { showToast("Սխալ պահպանելիս", "error"); }
+        if (r.ok) { showToast("Կարգավորումները հաջողությամբ պահպանվեցին", "success"); loadSettings(); }
+    } catch(e) { showToast("Տեղի ունեցավ սխալ պահպանելիս", "error"); }
 }
 
 async function pollQueue() {
@@ -194,7 +196,8 @@ async function pollQueue() {
             let statusBadge = isFailed ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20';
 
             let safeTitle = escapeHTML(item.title);
-            let safeImageUrl = escapeHTML(item.image_url);
+            let imgUrl = item.image_url?.String || item.image_url || "";
+            let safeImageUrl = escapeHTML(imgUrl);
 
             tr.innerHTML = `
                 <td class="py-6 px-8"><img src="${safeImageUrl}" class="w-14 h-14 object-cover rounded-xl border border-white/10" onerror="this.src='/temp_image.jpg'"></td>
@@ -237,36 +240,38 @@ async function toggleBot() {
 }
 
 async function deleteItem(id) {
-    if(!confirm("Հեռացնե՞լ հերթից:")) return;
+    if(!confirm("Վստա՞հ եք, որ ցանկանում եք ջնջել հոդվածը։")) return;
     const r = await fetch("/api/queue/delete", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({id: id}) });
-    if(r.ok) pollQueue();
+    if(r.ok) pollQueue(); loadAnalytics();
 }
 
 async function clearQueue() {
-    if(!confirm("Մաքրե՞լ հերթի բոլոր հոդվածները (վերաշարադրված և սխալված):")) return;
+    if(!confirm("Վստա՞հ եք, որ ցանկանում եք մաքրել հերթը։")) return;
     showToast("Մաքրվում է...", "info");
     const r = await fetch("/api/queue/clear", { method: "POST" });
     if(r.ok) {
-        showToast("Հերթը մաքրված է", "success");
-        pollQueue();
+        showToast("Հերթը մաքրվեց", "success");
+        pollQueue(); loadAnalytics();
     } else {
-        showToast("Սխալ մաքրելիս", "error");
+        showToast("Տեղի ունեցավ սխալ", "error");
     }
 }
 
 async function publishItem(id) {
-    showToast("Հրապարակումը սկսվեց...", "info");
+    showToast("Հոդվածը հրապարակվում է...", "info");
     const r = await fetch("/api/queue/publish", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({id: id}) });
-    if(r.ok) { pollQueue(); }
+    if(r.ok) { pollQueue(); loadAnalytics(); }
 }
 
 function showPreview(item) {
     currentArticleId = item.id;
     document.getElementById('prev-title').innerText = item.title;
-    // We trust this because it is sanitized on the backend via bluemonday.UGCPolicy
     document.getElementById('prev-content').innerHTML = item.rewritten_content?.String || item.content;
-    document.getElementById('prev-image').src = item.image_url;
-    document.getElementById('prev-image').style.display = item.image_url ? 'block' : 'none';
+    
+    let imgUrl = item.image_url?.String || item.image_url || "";
+    document.getElementById('prev-image').src = imgUrl;
+    document.getElementById('prev-image').style.display = imgUrl ? 'block' : 'none';
+    
     document.getElementById('preview-modal').classList.remove('hidden');
     document.getElementById('prev-publish-btn').onclick = () => { publishItem(item.id); closePreview(); };
 }
@@ -291,9 +296,9 @@ async function saveEdit() {
         body: JSON.stringify(updated)
     });
     if (r.ok) {
-        showToast("Փոփոխությունները պահպանված են", "success");
+        showToast("Հոդվածը պահպանվեց", "success");
         closeEditModal();
-        pollQueue();
+        pollQueue(); loadAnalytics();
         document.getElementById('prev-title').innerText = updated.title;
         document.getElementById('prev-content').innerHTML = updated.rewritten_content;
     }
@@ -320,7 +325,7 @@ async function loadAnalytics() {
 
 function escapeHTML(str) {
     if (str === null || str === undefined) return '';
-    return String(str).replace(/[&<>'"]/g, 
+    return String(str).replace(/[&<>'"]/g,
         tag => ({
             '&': '&amp;',
             '<': '&lt;',
@@ -341,10 +346,11 @@ function addLog(msg, ts) {
     logOutput.scrollTop = logOutput.scrollHeight;
 }
 
-// Init
 initWS();
 checkStatus();
 loadSettings();
+pollQueue();
+loadAnalytics();
 setInterval(checkStatus, 5000);
 if (startBtn) startBtn.onclick = toggleBot;
 if (stopBtn) stopBtn.onclick = toggleBot;

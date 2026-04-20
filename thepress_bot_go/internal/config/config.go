@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"sync"
+	"fmt"
 
 	"github.com/jmoiron/sqlx"
 )
@@ -69,12 +70,18 @@ func Load() error {
 
 	// Fallback to settings.json only if DB is empty
 	if _, err := os.Stat("settings.json"); err == nil {
-		data, _ := os.ReadFile("settings.json")
-		if err := json.Unmarshal(data, &GlobalConfig); err == nil {
-			_ = migrateConfigToSQLiteLocked(GlobalConfig)
-			os.Rename("settings.json", "settings.json.bak")
-			return nil
+		data, err := os.ReadFile("settings.json")
+		if err != nil {
+			return fmt.Errorf("failed to read settings.json: %w", err)
 		}
+		if err := json.Unmarshal(data, &GlobalConfig); err != nil {
+			return fmt.Errorf("failed to unmarshal settings.json: %w", err)
+		}
+		if err := saveConfigToSQLiteLocked(GlobalConfig); err != nil {
+			return fmt.Errorf("failed to migrate config to sqlite: %w", err)
+		}
+		os.Rename("settings.json", "settings.json.bak")
+		return nil
 	}
 
 	// Default settings if nothing exists
@@ -133,13 +140,21 @@ func Save(cfg Config) error {
 	defer mu.Unlock()
 
 	// Preserving sensitive data if not provided in update
-	if cfg.WordPress.AppPassword == "" { cfg.WordPress.AppPassword = GlobalConfig.WordPress.AppPassword }
-	if cfg.AI.NvidiaAPIKey == "" { cfg.AI.NvidiaAPIKey = GlobalConfig.AI.NvidiaAPIKey }
-	if cfg.AI.ModelsLabKey == "" { cfg.AI.ModelsLabKey = GlobalConfig.AI.ModelsLabKey }
+	if cfg.WordPress.AppPassword == "" {
+		cfg.WordPress.AppPassword = GlobalConfig.WordPress.AppPassword
+	}
+	if cfg.AI.NvidiaAPIKey == "" {
+		cfg.AI.NvidiaAPIKey = GlobalConfig.AI.NvidiaAPIKey
+	}
+	if cfg.AI.ModelsLabKey == "" {
+		cfg.AI.ModelsLabKey = GlobalConfig.AI.ModelsLabKey
+	}
 
 	if dbConn != nil {
-		err := migrateConfigToSQLiteLocked(cfg)
-		if err != nil { return err }
+		err := saveConfigToSQLiteLocked(cfg)
+		if err != nil {
+			return err
+		}
 	}
 
 	GlobalConfig = cfg
@@ -152,7 +167,7 @@ func Get() Config {
 	return GlobalConfig
 }
 
-func migrateConfigToSQLiteLocked(cfg Config) error {
+func saveConfigToSQLiteLocked(cfg Config) error {
 	query := "INSERT INTO app_settings (id, wp_url, wp_username, wp_app_password, ai_tool, nvidia_api_key, modelslab_api_key, min_article_len, run_interval_hours, run_interval_minutes, publish_interval_minutes, auto_publish, system_prompt_nvidia, system_prompt_modelslab) VALUES (1, :wp_url, :wp_username, :wp_app_password, :ai_tool, :nvidia_api_key, :modelslab_api_key, :min_article_len, :run_interval_hours, :run_interval_minutes, :publish_interval_minutes, :auto_publish, :system_prompt_nvidia, :system_prompt_modelslab) ON CONFLICT(id) DO UPDATE SET wp_url=excluded.wp_url, wp_username=excluded.wp_username, wp_app_password=excluded.wp_app_password, ai_tool=excluded.ai_tool, nvidia_api_key=excluded.nvidia_api_key, modelslab_api_key=excluded.modelslab_api_key, min_article_len=excluded.min_article_len, run_interval_hours=excluded.run_interval_hours, run_interval_minutes=excluded.run_interval_minutes, publish_interval_minutes=excluded.publish_interval_minutes, auto_publish=excluded.auto_publish, system_prompt_nvidia=excluded.system_prompt_nvidia, system_prompt_modelslab=excluded.system_prompt_modelslab;"
 
 	flat := map[string]interface{}{
@@ -172,7 +187,9 @@ func migrateConfigToSQLiteLocked(cfg Config) error {
 	}
 
 	tx, err := dbConn.Beginx()
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 
 	_, err = tx.NamedExec(query, flat)
 	if err != nil {
@@ -180,9 +197,17 @@ func migrateConfigToSQLiteLocked(cfg Config) error {
 		return err
 	}
 
-	_, _ = tx.Exec("DELETE FROM rss_topics")
+	_, err = tx.Exec("DELETE FROM rss_topics")
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
 	for _, topic := range cfg.Topics {
-		_, _ = tx.NamedExec("INSERT INTO rss_topics (name, wp_category_id, rss_url) VALUES (:name, :wp_category_id, :rss_url)", topic)
+		_, err = tx.NamedExec("INSERT INTO rss_topics (name, wp_category_id, rss_url) VALUES (:name, :wp_category_id, :rss_url)", topic)
+		if err != nil {
+			tx.Rollback()
+			return err
+		}
 	}
 
 	return tx.Commit()
