@@ -54,6 +54,7 @@ func (r *BotRunner) Start() {
 	utils.BroadcastEvent("status_update", map[string]bool{"running": true})
 
 	go r.runScrapeLoop(r.ctx)
+	go r.runAILoop(r.ctx)
 	go r.runPublishLoop(r.ctx)
 }
 
@@ -149,6 +150,30 @@ func (r *BotRunner) runScrapeLoop(ctx context.Context) {
 			interval := time.Duration(intervalMinutes) * time.Minute
 			utils.BroadcastLog("--- [SCRAPE CYCLE END] Sleeping %v ---", interval)
 
+			timer := time.NewTimer(interval)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	}
+}
+
+func (r *BotRunner) runAILoop(ctx context.Context) {
+	time.Sleep(5 * time.Second) // Stagger start
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			cfg := config.Get()
+			r.useCase.ExecuteAICycle(ctx, cfg)
+
+			// Polling interval for AI processing
+			interval := 15 * time.Second
 			timer := time.NewTimer(interval)
 			select {
 			case <-ctx.Done():

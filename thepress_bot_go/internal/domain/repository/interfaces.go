@@ -9,6 +9,7 @@ type ArticleRepository interface {
 	Save(ctx context.Context, article *models.Article) error
 	Update(ctx context.Context, article *models.Article) error
 	GetByID(ctx context.Context, id int64) (*models.Article, error)
+	GetUnprocessed(ctx context.Context, limit int) ([]models.Article, error)
 	GetPending(ctx context.Context, limit int) ([]models.Article, error)
 	GetFailed(ctx context.Context, limit int) ([]models.Article, error)
 	GetOneRewrittenByCategory(ctx context.Context, catID int) (*models.Article, error)

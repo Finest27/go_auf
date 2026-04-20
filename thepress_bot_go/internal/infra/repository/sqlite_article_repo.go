@@ -1,4 +1,4 @@
-﻿package repository
+package repository
 
 import (
 	"context"
@@ -55,11 +55,19 @@ func (r *SQLiteArticleRepository) Update(ctx context.Context, a *models.Article)
 	return err
 }
 
+func (r *SQLiteArticleRepository) GetUnprocessed(ctx context.Context, limit int) ([]models.Article, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var articles []models.Article
+	err := r.db.SelectContext(ctx, &articles, "SELECT * FROM articles WHERE status = 'pending' ORDER BY id ASC LIMIT ?", limit)
+	return articles, err
+}
+
 func (r *SQLiteArticleRepository) GetPending(ctx context.Context, limit int) ([]models.Article, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var articles []models.Article
-	err := r.db.SelectContext(ctx, &articles, "SELECT * FROM articles WHERE status IN ('rewritten', 'failed') ORDER BY id DESC LIMIT ?", limit)
+	err := r.db.SelectContext(ctx, &articles, "SELECT * FROM articles WHERE status IN ('pending', 'rewritten', 'failed') ORDER BY id DESC LIMIT ?", limit)
 	return articles, err
 }
 
@@ -114,7 +122,7 @@ func (r *SQLiteArticleRepository) GetStats(ctx context.Context) (published, pend
 	defer r.mu.RUnlock()
 	err = r.db.GetContext(ctx, &published, "SELECT COUNT(*) FROM articles WHERE status = 'published'")
 	if err != nil { return }
-	err = r.db.GetContext(ctx, &pending, "SELECT COUNT(*) FROM articles WHERE status = 'rewritten'")
+	err = r.db.GetContext(ctx, &pending, "SELECT COUNT(*) FROM articles WHERE status IN ('pending', 'rewritten')")
 	if err != nil { return }
 	err = r.db.GetContext(ctx, &failed, "SELECT COUNT(*) FROM articles WHERE status = 'failed'")
 	return
@@ -135,7 +143,7 @@ func (r *SQLiteArticleRepository) Delete(ctx context.Context, id int64) error {
 func (r *SQLiteArticleRepository) ClearQueue(ctx context.Context) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	_, err := r.db.ExecContext(ctx, "DELETE FROM articles WHERE status IN ('rewritten', 'failed')")
+	_, err := r.db.ExecContext(ctx, "DELETE FROM articles WHERE status IN ('pending', 'rewritten', 'failed')")
 
 	if err == nil {
 		go utils.BroadcastEvent("queue_update", nil)

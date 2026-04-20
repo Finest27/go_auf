@@ -1,9 +1,9 @@
-﻿package usecase
+package usecase
 
 import (
 	"context"
 	"database/sql"
-		"thepress_bot_go/internal/config"
+	"thepress_bot_go/internal/config"
 	"thepress_bot_go/internal/domain/models"
 	"thepress_bot_go/internal/domain/repository"
 	"thepress_bot_go/internal/domain/services"
@@ -32,102 +32,122 @@ func NewArticleUseCase(repo repository.ArticleRepository, linker services.Linker
 }
 
 func (u *ArticleUseCase) ExecuteScrapeCycle(ctx context.Context, cfg config.Config, startIndex int) int {
-        _, pendingRewritten, failedCount, err := u.repo.GetStats(ctx)
-        if err == nil {
-                if failedCount > 0 {
-                        failedArticles, err := u.repo.GetFailed(ctx, 1)
-                        if err == nil && len(failedArticles) > 0 {
-                                art := failedArticles[0]
-                                utils.BroadcastLog("[RETRY] Կրկնակի փորձ վերաշարադրելու հոդվածը (#%d): %s", art.RetryCount+1, art.Title)
-                                u.processWithAI(ctx, &art, u.factory.CreateAI(cfg))
-                                return startIndex
-                        }
-                }
+	if len(cfg.Topics) == 0 {
+		return 0
+	}
 
-                if pendingRewritten > 0 {
-                        utils.BroadcastLog("[SCRAPE] Կա սպասող հոդված (%d հատ): Սպասում ենք հրապարակմանը...", pendingRewritten)
-                        return startIndex
-                }
-        }
+	for i := 0; i < len(cfg.Topics); i++ {
+		indexToCheck := (startIndex + i) % len(cfg.Topics)
+		topic := cfg.Topics[indexToCheck]
 
-        aiProv := u.factory.CreateAI(cfg)
+		select {
+		case <-ctx.Done():
+			return startIndex
+		default:
+			utils.BroadcastLog("[SYSTEM] Ստուգում ենք RSS թեման: %s", topic.Name) 
+			scraperService, err := u.factory.CreateScraper()
+			if err != nil {
+				utils.BroadcastLog("[SYSTEM ERROR] Failed to create scraper: %v", err)
+				continue
+			}
 
-        if len(cfg.Topics) == 0 {
-                return 0
-        }
+			processedOne := false
+			func() {
+				defer scraperService.Close()
 
-        for i := 0; i < len(cfg.Topics); i++ {
-                indexToCheck := (startIndex + i) % len(cfg.Topics)
-                topic := cfg.Topics[indexToCheck]
+				var links []string
+				var fetchErr error
+				for r := 0; r < 3; r++ {
+					links, fetchErr = scraperService.FetchRSSLinks(ctx, topic.RSSURL)
+					if fetchErr == nil {
+						break
+					}
+					utils.BroadcastLog("[SYSTEM WARNING] Fetch links failed, retrying (%d/3)...", r+1)
+					time.Sleep(2 * time.Second)
+				}
 
-                select {
-                case <-ctx.Done():
-                        return startIndex
-                default:
-                        utils.BroadcastLog("[SYSTEM] Ստուգում ենք RSS թեման: %s", topic.Name) 
-                        scraperService, err := u.factory.CreateScraper()
-                        if err != nil {
-                                utils.BroadcastLog("[SYSTEM ERROR] Failed to create scraper: %v", err)
-                                continue
-                        }
+				if fetchErr != nil {
+					utils.BroadcastLog("[SYSTEM ERROR] Failed to fetch links for %s after retries: %v", topic.Name, fetchErr)
+					return
+				}
 
-                        processedOne := false
-                        func() {
-                                defer scraperService.Close()
+				for _, link := range links {
+					exists, err := u.repo.Exists(ctx, link)
+					if err != nil {
+						utils.BroadcastLog("[SYSTEM ERROR] DB error checking exists: %v", err)
+						continue
+					}
+					if exists {
+						continue
+					}
 
-                                links, err := scraperService.FetchRSSLinks(ctx, topic.RSSURL) 
-                                if err != nil {
-                                        utils.BroadcastLog("[SYSTEM ERROR] Failed to fetch links for %s: %v", topic.Name, err)
-                                        return
-                                }
+					var title, content, image string
+					var scrapeErr error
+					for r := 0; r < 3; r++ {
+						scrapeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+						title, content, image, scrapeErr = scraperService.ScrapeArticle(scrapeCtx, link)
+						cancel()
+						if scrapeErr == nil {
+							break
+						}
+						utils.BroadcastLog("[SYSTEM WARNING] Scrape failed for %s, retrying (%d/3)...", link, r+1)
+						time.Sleep(2 * time.Second)
+					}
 
-                                for _, link := range links {
-                                        exists, err := u.repo.Exists(ctx, link)
-                                        if err != nil {
-                                                utils.BroadcastLog("[SYSTEM ERROR] DB error checking exists: %v", err)
-                                                continue
-                                        }
-                                        if exists {
-                                                continue
-                                        }
+					if scrapeErr != nil {
+						utils.BroadcastLog("[SYSTEM ERROR] Failed to scrape article %s after retries: %v", link, scrapeErr)
+						continue
+					}
 
-                                        scrapeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
-                                        title, content, image, err := scraperService.ScrapeArticle(scrapeCtx, link)
-                                        cancel()
+					if len(content) < cfg.Advanced.MinArticleLen {        
+						continue
+					}
 
-                                        if err != nil {
-                                                continue
-                                        }
+					art := &models.Article{
+						Title:      title,
+						Content:    content,
+						SourceURL:  link,
+						ImageURL:   sql.NullString{String: image, Valid: image != ""},
+						Status:     "pending",
+						CategoryID: sql.NullInt64{Int64: int64(topic.WPCategoryID), Valid: true},
+					}
+					if err := u.repo.Save(ctx, art); err != nil {
+						utils.BroadcastLog("[SYSTEM ERROR] Failed to save article: %v", err)
+						return
+					}
 
-                                        if len(content) < cfg.Advanced.MinArticleLen {        
-                                                continue
-                                        }
+					utils.BroadcastLog("[SCRAPER] Ավելացվել է հերթի մեջ: %s", art.Title)
+					processedOne = true
+					return
+				}
+			}()
 
-                                        art := &models.Article{
-                                                Title:      title,
-                                                Content:    content,
-                                                SourceURL:  link,
-                                                ImageURL:   sql.NullString{String: image, Valid: image != ""},
-                                                Status:     "pending",
-                                                CategoryID: sql.NullInt64{Int64: int64(topic.WPCategoryID), Valid: true},
-                                        }
-                                        if err := u.repo.Save(ctx, art); err != nil {
-                                                utils.BroadcastLog("[SYSTEM ERROR] Failed to save article: %v", err)
-                                                return
-                                        }
+			if processedOne {
+				return (indexToCheck + 1) % len(cfg.Topics)
+			}
+		}
+	}
+	return startIndex
+}
 
-                                        u.processWithAI(ctx, art, aiProv)
-                                        processedOne = true
-                                        return
-                                }
-                        }()
+func (u *ArticleUseCase) ExecuteAICycle(ctx context.Context, cfg config.Config) {
+	// First check failed articles that are due for a retry
+	failedArticles, err := u.repo.GetFailed(ctx, 1)
+	if err == nil && len(failedArticles) > 0 {
+		art := failedArticles[0]
+		utils.BroadcastLog("[RETRY] Կրկնակի փորձ վերաշարադրելու հոդվածը (#%d): %s", art.RetryCount+1, art.Title)
+		u.processWithAI(ctx, &art, u.factory.CreateAI(cfg))
+		return
+	}
 
-                        if processedOne {
-                                return (indexToCheck + 1) % len(cfg.Topics)
-                        }
-                }
-        }
-        return startIndex
+	// If no failed articles, check for pending unprocessed articles
+	unprocessed, err := u.repo.GetUnprocessed(ctx, 1)
+	if err == nil && len(unprocessed) > 0 {
+		art := unprocessed[0]
+		utils.BroadcastLog("[AI START] Վերաշարադրում ենք նոր հոդված: %s", art.Title)
+		u.processWithAI(ctx, &art, u.factory.CreateAI(cfg))
+		return
+	}
 }
 
 func (u *ArticleUseCase) processWithAI(ctx context.Context, art *models.Article, aiProv services.AIProvider) {
@@ -166,44 +186,6 @@ func (u *ArticleUseCase) PublishSingle(ctx context.Context, cfg config.Config, a
 	pub := u.factory.CreatePublisher(cfg)
 
 	finalHTML := u.linker.InjectLinks(ctx, art.ID, art.RewrittenContent.String)
-	art.RewrittenContent.String = finalHTML
-
-	pubLink, pubErr := pub.Publish(art, int(art.CategoryID.Int64))
-	if pubErr != nil {
-		art.Status = "failed"
-		art.RetryCount++
-		art.NextRetryAt = sql.NullTime{Time: time.Now().Add(30 * time.Minute), Valid: true}
-		u.repo.Update(ctx, art)
-		utils.BroadcastLog("[PUBLISHER ERROR] %v", pubErr)
-		return
-	}
-
-	art.Status = "published"
-	art.PublishDate = sql.NullTime{Time: time.Now(), Valid: true}
-	if err := u.repo.Update(ctx, art); err != nil {
-		utils.BroadcastLog("[SYSTEM ERROR] Failed to update article publish status: %v", err)
-	}
-	utils.BroadcastLog("[SUCCESS] Հրապարակված է: %s", pubLink)
-}
-
-func (u *ArticleUseCase) ExecutePublishCycle(ctx context.Context, cfg config.Config, startIndex int) int {
-	if len(cfg.Topics) == 0 {
-		return 0
-	}
-
-	for i := 0; i < len(cfg.Topics); i++ {
-		indexToCheck := (startIndex + i) % len(cfg.Topics)
-		topic := cfg.Topics[indexToCheck]
-
-		art, err := u.repo.GetOneRewrittenByCategory(ctx, topic.WPCategoryID)
-		if err == nil && art != nil {
-			u.PublishSingle(ctx, cfg, art)
-			return (indexToCheck + 1) % len(cfg.Topics)
-		}
-	}
-	return startIndex
-}
- art.RewrittenContent.String)
 	art.RewrittenContent.String = finalHTML
 
 	pubLink, pubErr := pub.Publish(art, int(art.CategoryID.Int64))
