@@ -1,84 +1,81 @@
-# ThePress Bot Ultimate Architecture Map
+# ThePress Bot Ultimate Ճարտարապետության Քարտեզ
 
-This document provides a comprehensive map of the bot's codebase, making it easier to navigate and apply changes. It outlines the directory structure, key files, their functions, and the database schema.
+Այս փաստաթուղթը տրամադրում է բոտի կոդի բազայի համապարփակ քարտեզը, ինչը հեշտացնում է նավարկելը և փոփոխություններ կատարելը: Այն նկարագրում է դիրեկտորիաների կառուցվածքը, հիմնական ֆայլերը, դրանց գործառույթները և տվյալների բազայի կառուցվածքը:
 
-## Directory Structure
+## Դիրեկտորիաների Կառուցվածքը
 
-*   **`cmd/bot/`**: Contains the application entry point.
-*   **`internal/config/`**: Handles application settings.
-*   **`internal/domain/`**: Defines the core entities (models) and contracts (interfaces).
-*   **`internal/infra/`**: Contains concrete implementations (database, external APIs, scrapers).
-*   **`internal/usecase/`**: Implements the core business logic.
+*   **`cmd/bot/`**: Պարունակում է հավելվածի մուտքի կետը (entry point):
+*   **`internal/config/`**: Կառավարում է հավելվածի կարգավորումները:
+*   **`internal/domain/`**: Սահմանում է հիմնական մոդելները (entities) և ինտերֆեյսները (contracts):
+*   **`internal/infra/`**: Պարունակում է կոնկրետ իրականացումները (տվյալների բազա, արտաքին API-ներ, սքրեյփերներ):
+*   **`internal/usecase/`**: Իրականացնում է հիմնական բիզնես տրամաբանությունը:
 
-## Key Files and Functions
+## Հիմնական Ֆայլերը և Ֆունկցիաները
 
 ### 1. `cmd/bot/main.go`
-This is the starting point of the application. It initializes the database, loads the configuration, sets up dependencies, and starts the background loops.
-
-*   **`main()`**: Initializes the database, dependencies, server, and starts the bot runner.
-*   **`BotRunner.Start()`**: Starts the background scraping and publishing loops (`runScrapeLoop`, `runPublishLoop`).
-*   **`BotRunner.Stop()`**: Stops the background loops.
-*   **`runScrapeLoop(ctx)`**: Periodically executes `ArticleUseCase.ExecuteScrapeCycle()`.
-*   **`runPublishLoop(ctx)`**: Periodically executes `ArticleUseCase.ExecutePublishCycle()`.
+Սա հավելվածի սկզբնակետն է։ Այն սկզբնավորում է տվյալների բազան, բեռնում կարգավորումները, կարգավորում կախվածությունները և սկսում ֆոնային ցիկլերը:
+*   **`main()`**: Սկզբնավորում է տվյալների բազան, API սերվերը և գործարկում բոտի runner-ը:
+*   **`BotRunner.Start()`**: Սկսում է ֆոնային գործընթացները (`runScrapeLoop`, `runAILoop`, `runPublishLoop`):
+*   **`BotRunner.Stop()`**: Կանգնեցնում է ֆոնային գործընթացները:
+*   **`runScrapeLoop(ctx)`**: Պարբերաբար կանչում է `ArticleUseCase.ExecuteScrapeCycle()`:
+*   **`runAILoop(ctx)`**: Պարբերաբար կանչում է `ArticleUseCase.ExecuteAICycle()`:
+*   **`runPublishLoop(ctx)`**: Պարբերաբար կանչում է `ArticleUseCase.ExecutePublishCycle()`:
 
 ### 2. `internal/config/config.go`
-Manages application settings, which are primarily stored in the SQLite database but can fall back to JSON.
-
-*   **`Load()`**: Loads settings from the database into memory.
-*   **`Save()`**: Saves the current in-memory settings back to the database.
-*   **`Get()`**: Returns the current configuration object.
+Կառավարում է հավելվածի կարգավորումները, որոնք պահվում են SQLite տվյալների բազայում, բայց կարող են վերցվել նաև JSON-ից։
+*   **`Load()`**: Բեռնում է կարգավորումները տվյալների բազայից հիշողության մեջ:
+*   **`Save(cfg)`**: Պահպանում է նոր կարգավորումները տվյալների բազայում:
+*   **`Get()`**: Վերադարձնում է ընթացիկ կարգավորումների օբյեկտը:
 
 ### 3. `internal/domain/models/`
-Defines the core data structures used throughout the application.
+Սահմանում է հիմնական տվյալների կառուցվածքները:
+*   **`article.go`**: Սահմանում է `Article` կառուցվածքը (SourceURL, Title, Content, RewrittenContent, Status, PublishDate և այլն):
+*   **`feed.go`**: Սահմանում է `Feed` կառուցվածքը:
 
-*   **`article.go`**: Defines the `Article` struct (SourceURL, Title, Content, RewrittenContent, Status, PublishDate, slug, tags, meta description, etc.).
+### 4. `internal/domain/repository/` և `internal/domain/services/`
+Սահմանում են ինտերֆեյսներ, որոնց միջոցով usecase-ը շփվում է ինֆրաստրուկտուրայի հետ (`ArticleRepository`, `AIProvider`, `Publisher`, `ScraperService`):
 
-### 4. `internal/usecase/article_usecase.go`
-Contains the central business logic orchestrating the scraping, rewriting, and publishing processes.
+### 5. `internal/usecase/article_usecase.go`
+Պարունակում է կենտրոնական բիզնես տրամաբանությունը, որը կառավարում է հոդվածների հավաքագրման, վերաշարադրման և հրապարակման գործընթացները:
+*   **`ExecuteScrapeCycle()`**: Ստուգում է RSS ալիքները, հավաքագրում նոր հոդվածները և պահպանում բազայում որպես "pending":
+*   **`ExecuteAICycle()`**: Վերցնում է չմշակված կամ ձախողված հոդվածները և ուղարկում AI-ին վերաշարադրման: Կարգավիճակը փոխվում է "rewritten":
+*   **`ExecutePublishCycle()`**: Գտնում է վերաշարադրված հոդվածները և հրապարակում WordPress-ում: Կարգավիճակը փոխվում է "published":
 
-*   **`ArticleUseCase.ExecuteScrapeCycle()`**: Iterates through configured RSS topics, triggers the scraper, and saves new articles to the database with a "pending" status.
-*   **`ArticleUseCase.ExecutePublishCycle()`**: Finds pending articles, triggers the AI to rewrite the content, and then triggers the publisher to post to WordPress. Updates the article status to "published".
+### 6. `internal/infra/` (Ենթադիրեկտորիաներ)
+*   **`database/sqlite.go`**: Կապակցում է SQLite բազայի հետ և ստեղծում սխեմաները (`NewSQLiteDB`):
+*   **`repository/sqlite_article_repo.go`**: Իրականացնում է հոդվածների պահպանումը, թարմացումը և ստացումը բազայից:
+*   **`ai/`**: Պարունակում է AI պրովայդերների իրականացումները (`nvidia.go`, `modelslab.go`):
+*   **`publisher/`**: Պարունակում է WordPress-ի հետ կապը (`wordpress.go`, `linker.go`):
+*   **`scraper/`**: Իրականացնում է կայքերից տվյալների հավաքագրումը `go-rod` և `gofeed` գրադարանների միջոցով (`wrapper.go`, `universal.go`):
+*   **`api/server.go`**: Իրականացնում է Fiber վեբ սերվերը և HTTP հարցումները բոտի կառավարման վահանակի համար:
 
-### 5. `internal/infra/database/sqlite.go` (and related files)
-Handles the SQLite database connection and schema.
+## Տվյալների Բազայի Սխեման (SQLite)
 
-*   **`NewSQLiteDB(path)`**: Opens a connection to the SQLite database.
+Բոտն օգտագործում է SQLite բազա (սովորաբար `bot_ultimate.db`), որն ունի հետևյալ հիմնական աղյուսակները.
 
-### 6. `internal/infra/` (Subdirectories)
-Contains the implementations for external interactions.
+### 1. `app_settings`
+*   Պահպանում է բոտի գլոբալ կարգավորումները:
+*   **Սյուներ**: `wp_url`, `wp_username`, `wp_app_password`, `ai_tool`, `nvidia_api_key`, `modelslab_api_key`, `min_article_len`, ինտերվալներ, ավտոհրապարակման կարգավորումներ և AI պրոմպտներ:
 
-*   **`api/`**: Web server logic and HTTP handlers for the bot's dashboard/control panel.
-*   **`repository/`**: SQL implementations for saving/retrieving articles and settings from the database.
-*   **`scraper/`**: Logic for fetching XML from RSS feeds and parsing it.
-*   **`publisher/`**: Logic for authenticating and interacting with the WordPress REST API to create posts.
-*   **`ai/`**: Implementations for communicating with AI providers (like Nvidia or ModelsLab) to rewrite the article text.
+### 2. `rss_topics`
+*   Պահպանում է RSS աղբյուրների ցանկը:
+*   **Սյուներ**: `name` (Անուն), `wp_category_id` (WordPress կատեգորիայի ID), `rss_url` (RSS հասցեն):
 
-## Database Schema (SQLite)
+### 3. `articles`
+*   Պահպանում է բոլոր հավաքագրված և մշակված հոդվածները:
+*   **Հիմնական սյուներ**:
+    *   `id`, `source_url` (Բնօրինակ հղում, դուպլիկատներից խուսափելու համար)
+    *   `title` (Վերնագիր), `content` (Բնօրինակ տեքստ)
+    *   `rewritten_content` (AI-ի կողմից վերաշարադրված տեքստ)
+    *   `status` (օրինակ՝ "pending", "rewritten", "published", "failed")
+    *   `image_url`, `meta_description`, `focus_keywords`, `slug`, `tags`, `image_alt`
+    *   `retry_count`, `next_retry_at` (Կրկնակի փորձերի համար)
+    *   `publish_date`, `created_at`
 
-The bot uses an SQLite database (typically `bot_ultimate.db`) with the following key tables:
+## Ինչպես կատարել փոփոխություններ
 
-1.  **`app_settings`**:
-    *   Stores global bot configuration.
-    *   Examples: Run intervals, WordPress credentials (URL, username, app password), AI API keys, and prompts used for rewriting.
-2.  **`rss_topics`**:
-    *   Stores the list of RSS feeds to scrape.
-    *   Links each feed URL to a specific WordPress Category ID.
-3.  **`articles`**:
-    *   Stores all scraped and processed articles.
-    *   Key columns:
-        *   `source_url` (Primary identifier to avoid duplicates)
-        *   `title` (Original title)
-        *   `content` (Original content)
-        *   `rewritten_content` (Content generated by AI)
-        *   `status` (e.g., "pending", "published", "failed")
-        *   `publish_date`
-        *   SEO metadata (`slug`, `tags`, `meta_description`)
-        *   `wp_post_id` (ID of the created post in WordPress)
-
-## How to Make Changes
-
-*   **Adding a new configuration option**: Update `internal/config/config.go`, the `app_settings` table schema (if adding a new column), and potentially the `internal/infra/api` handlers to allow changing it via the dashboard.
-*   **Modifying the scraping logic**: Look at `internal/infra/scraper/`.
-*   **Changing how articles are rewritten**: Update the AI integration in `internal/infra/ai/` and the prompt logic in `internal/usecase/article_usecase.go`.
-*   **Changing WordPress publishing**: Modify the code in `internal/infra/publisher/`.
-*   **Adding a new background task**: Add a new loop function in `cmd/bot/main.go` inside the `BotRunner` and a corresponding method in the relevant use case.
+*   **Նոր կարգավորում ավելացնելիս**: Թարմացրեք `internal/config/config.go`, `app_settings` աղյուսակը (`internal/infra/database/sqlite.go`) և `internal/infra/api/server.go` կառավարման վահանակը:
+*   **Սքրեյփինգի տրամաբանությունը փոխելիս**: Աշխատեք `internal/infra/scraper/` ֆայլերի հետ:
+*   **AI վերաշարադրումը փոխելիս**: Թարմացրեք `internal/infra/ai/` պրովայդերները կամ պրոմպտների տրամաբանությունը `internal/usecase/article_usecase.go`-ում:
+*   **WordPress հրապարակումը փոխելիս**: Խմբագրեք `internal/infra/publisher/wordpress.go`:
+*   **Նոր ֆոնային առաջադրանք ավելացնելիս**: Ավելացրեք նոր ցիկլ (loop) `cmd/bot/main.go` ֆայլում և համապատասխան ֆունկցիա `internal/usecase/`-ում:
